@@ -1,0 +1,3 @@
+[submodule "pix2pixHD"]
+	path = pix2pixHD
+	url = https://github.com/klo9klo9kloi/pix2pixHD.git
