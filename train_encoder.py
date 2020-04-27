@@ -1,93 +1,136 @@
-import torch
-import torch.nn
+# python train_encoder.py --name eta --dataroot 'data/dylan/eta/' --label_nc 3 --loadSize 640 --resize_or_crop none
+
+import time
+import os
 import numpy as np
+import torch
+from torch.autograd import Variable
+from collections import OrderedDict
+from subprocess import call
+import fractions
+def lcm(a,b): return abs(a * b)/fractions.gcd(a,b) if a and b else 0
 
-#TODO: load data
+from options.train_options import TrainOptions
+# from models.models import create_model
+from dataset_creation import CreateDataLoader
+from util import util
+from pose_to_image_model import MovGenModel
+from util.visualizer import Visualizer
 
-print()
-print('----------------------------------------')
-print('Training with parameters: ' + str(self.get_params()))
+opt = TrainOptions().parse()
+iter_path = os.path.join(opt.checkpoints_dir, opt.name, 'iter.txt')
+if opt.continue_train:
+    try:
+        start_epoch, epoch_iter = np.loadtxt(iter_path , delimiter=',', dtype=int)
+    except:
+        start_epoch, epoch_iter = 1, 0
+    print('Resuming from epoch %d at iteration %d' % (start_epoch, epoch_iter))        
+else:    
+    start_epoch, epoch_iter = 1, 0
 
-pose_dim = ..
-noise_dim = ..
-hidden_dim = 50
+opt.print_freq = lcm(opt.print_freq, opt.batchSize)    
+if opt.debug:
+    opt.display_freq = 1
+    opt.print_freq = 1
+    opt.niter = 1
+    opt.niter_decay = 0
+    opt.max_dataset_size = 10
 
-generator = CGAN_Generator(noise_dim, pose_dim, pose_dim, hidden_dim)
-discriminator = CGAN_Discriminator(pose_dim, pose_dim, hidden_dim)
+data_loader = CreateDataLoader(opt)
+dataset = data_loader.load_data()
+dataset_size = len(dataset)
+print('#training images = %d' % dataset_size)
 
-all_training_data = torch.from_numpy(X.astype('float64'))
-all_training_labels = torch.from_numpy(y.astype('float64'))
-data = TensorDataset(all_training_data, all_training_labels)
-loader = DataLoader(data, shuffle=True, batch_size=32)
+model = MovGenModel()
+model.initialize(opt)
+if len(opt.gpu_ids):
+	model = torch.nn.DataParallel(model, device_ids=opt.gpu_ids)
+visualizer = Visualizer(opt)
 
-is_cuda = torch.cuda.is_available()
-DoubleTensor = torch.cuda.DoubleTensor if is_cuda else torch.DoubleTensor
+optimizer_G, optimizer_D = model.module.optimizer_G, model.module.optimizer_D
 
-if is_cuda:
-	device = torch.device("cuda")
-else:
-	device = torch.device("cpu")
+total_steps = (start_epoch-1) * dataset_size + epoch_iter
 
-generator.double()
-generator.to(device)
+display_delta = total_steps % opt.display_freq
+print_delta = total_steps % opt.print_freq
+save_delta = total_steps % opt.save_latest_freq
 
-discriminator.double()
-discriminator.to(device)
+for epoch in range(start_epoch, opt.niter + opt.niter_decay + 1):
+    epoch_start_time = time.time()
+    if epoch != start_epoch:
+        epoch_iter = epoch_iter % dataset_size
+    for i, data in enumerate(dataset, start=epoch_iter):
+        if total_steps % opt.print_freq == print_delta:
+            iter_start_time = time.time()
+        total_steps += opt.batchSize
+        epoch_iter += opt.batchSize
 
-lr = 1e-3
-weight_decay = 1e-5
+        # whether to collect output images
+        save_fake = total_steps % opt.display_freq == display_delta
 
-#set up loss function and optimizer
-g_optim = torch.optim.RMSProp(generator.parameters(), lr=lr, weight_decay=weight_decay)
-d_optim = torch.optim.RMSProp(discriminator.parameters(), lr=lr, weight_decay=weight_decay)
+        ############## Forward Pass ######################
+        losses, generated = model(Variable(data['label']), Variable(data['image']), infer=save_fake)
 
-epochs = 100
-seq_len = 15 #30 fps videos -> 15 = half second, 30 = second, ? = eight count
-generator_update_freq = 5
+        # sum per device losses
+        losses = [ torch.mean(x) if not isinstance(x, int) else x for x in losses ]
+        loss_dict = dict(zip(model.module.loss_names, losses))
 
-# train
-for i in range(epochs):
-	for b, (true_poses, start_poses) in enumerate(loader):
-		valid = Variable(DoubleTensor(inpts.size(0), 1).fill_(1.0), requires_grad=False) #implicit .to(device) because of earlier class declaration
-		fake = Variable(DoubleTensor(inpts.size(0), 1).fill_(0.0), requires_grad=False)
-		'''
-		Train Discriminator
-		'''
-		d_optim.zero_grad()
-		
-		z = Variable(DoubleTensor(np.random.normal(0, 1, (seq_len, inpts.size(0), noise_dim))))
+        # calculate final loss scalar
+        loss_D = (loss_dict['D_fake'] + loss_dict['D_real']) * 0.5
+        loss_G = loss_dict['G_GAN'] + loss_dict.get('G_GAN_Feat',0) + loss_dict.get('G_VGG',0)
 
-		true_poses = true_poses.to(device)
-		start_poses = start_poses.to(device)
-		g_hidden = generator.init_hidden(true_poses.size(0)).to(device)
-		d_hidden = discriminator.init_hidden(true_poses.size(0)).to(device)
+        ############### Backward Pass ####################
+        # update generator weights
+        optimizer_G.zero_grad()
+        loss_G.backward()          
+        optimizer_G.step()
 
-		generated_poses = generator(z, start_poses, g_hidden)
-		d_loss = -torch.mean(discriminator(generated_poses, start_poses, d_hidden)) + torch.mean(discriminator(true_poses, start_poses, d_hidden))
+        # update discriminator weights
+        optimizer_D.zero_grad()
+        loss_D.backward()        
+        optimizer_D.step()        
 
-		d_loss.backward()
-		d_optim.step()
-		# clip weights to a fixed threshold
-		for p in discriminator.parameters():
-    		p.data.clamp_(-0.01, 0.01)
+        ############## Display results and errors ##########
+        ### print out errors
+        if total_steps % opt.print_freq == print_delta:
+            errors = {k: v.data.item() if not isinstance(v, int) else v for k, v in loss_dict.items()}            
+            t = (time.time() - iter_start_time) / opt.print_freq
+            visualizer.print_current_errors(epoch, epoch_iter, errors, t)
+            visualizer.plot_current_errors(errors, total_steps)
+            #call(["nvidia-smi", "--format=csv", "--query-gpu=memory.used,memory.free"]) 
 
-		if b % generator_update_freq == 0:
+        ### display output images
+        if save_fake:
+            visuals = OrderedDict([('input_label', util.tensor2label(data['label'][0], opt.label_nc)),
+                                   ('synthesized_image', util.tensor2im(generated.data[0])),
+                                   ('real_image', util.tensor2im(data['image'][0]))])
+            visualizer.display_current_results(visuals, epoch, total_steps)
 
-			''' 
-			Train Generator
-			'''
-			g_optim.zero_grad()
+        ### save latest model
+        if total_steps % opt.save_latest_freq == save_delta:
+            print('saving the latest model (epoch %d, total_steps %d)' % (epoch, total_steps))
+            model.module.save('latest')            
+            np.savetxt(iter_path, (epoch, epoch_iter), delimiter=',', fmt='%d')
 
-			generated_poses = generator(z, start_poses, g_hidden)
-			g_loss = -torch.mean(discriminator(generated_poses, start_poses, d_hidden))
+        if epoch_iter >= dataset_size:
+            break
+       
+    # end of epoch 
+    iter_end_time = time.time()
+    print('End of epoch %d / %d \t Time Taken: %d sec' %
+          (epoch, opt.niter + opt.niter_decay, time.time() - epoch_start_time))
 
-			g_loss.backward()
-			g_optim.step()
+    ### save model for this epoch
+    if epoch % opt.save_epoch_freq == 0:
+        print('saving the model at the end of epoch %d, iters %d' % (epoch, total_steps))        
+        model.module.save('latest')
+        model.module.save(epoch)
+        np.savetxt(iter_path, (epoch+1, 0), delimiter=',', fmt='%d')
 
-		print(
-        	"[Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f]"
-        	% (i, epochs, b, len(loader), d_loss.item(), g_loss.item())
-    	)
+    ### instead of only training the local enhancer, train the entire network after certain iterations
+    if (opt.niter_fix_global != 0) and (epoch == opt.niter_fix_global):
+        model.module.update_fixed_params()
 
-torch.save(generator.state_dict(), 'generator.pth')
-torch.save(discriminator.state_dict(), 'discriminator.pth')
+    ### linearly decay learning rate after certain iterations
+    if epoch > opt.niter:
+        model.module.update_learning_rate()
