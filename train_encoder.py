@@ -10,12 +10,12 @@ from subprocess import call
 import fractions
 def lcm(a,b): return abs(a * b)/fractions.gcd(a,b) if a and b else 0
 
-from options.train_options import TrainOptions
+from pix2pixHD.options.train_options import TrainOptions
 # from models.models import create_model
 from dataset_creation import CreateDataLoader
-from util import util
+from pix2pixHD.util import util
 from pose_to_image_model import MovGenModel
-from util.visualizer import Visualizer
+from pix2pixHD.util.visualizer import Visualizer
 
 opt = TrainOptions().parse()
 iter_path = os.path.join(opt.checkpoints_dir, opt.name, 'iter.txt')
