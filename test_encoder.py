@@ -1,12 +1,13 @@
+# python test_encoder.py --name eta --dataroot 'data/dylan/eta/' --label_nc 3 --loadSize 640 --resize_or_crop none
 import os
 from collections import OrderedDict
 from torch.autograd import Variable
-from options.test_options import TestOptions
+from pix2pixHD.options.test_options import TestOptions
 from dataset_creation import CreateDataLoader
 from pose_to_image_model import MovGenModel
-import util.util as util
-from util.visualizer import Visualizer
-from util import html
+import pix2pixHD.util.util as util
+from pix2pixHD.util.visualizer import Visualizer
+from pix2pixHD.util import html
 import torch
 
 opt = TestOptions().parse(save=False)
@@ -26,8 +27,6 @@ webpage = html.HTML(web_dir, 'Experiment = %s, Phase = %s, Epoch = %s' % (opt.na
 if not opt.engine and not opt.onnx:
     model = MovGenModel()
     model.initialize(opt)
-    if len(opt.gpu_ids):
-        model = torch.nn.DataParallel(model, device_ids=opt.gpu_ids)
     if opt.data_type == 16:
         model.half()
     elif opt.data_type == 8:
@@ -37,31 +36,23 @@ if not opt.engine and not opt.onnx:
         print(model)
 else:
     from run_engine import run_trt_engine, run_onnx
-    
+
+prev_generation = None
 for i, data in enumerate(dataset):
     if i >= opt.how_many:
         break
     if opt.data_type == 16:
         data['label'] = data['label'].half()
-        data['inst']  = data['inst'].half()
     elif opt.data_type == 8:
         data['label'] = data['label'].uint8()
-        data['inst']  = data['inst'].uint8()
-    if opt.export_onnx:
-        print ("Exporting to ONNX: ", opt.export_onnx)
-        assert opt.export_onnx.endswith("onnx"), "Export model file should end with .onnx"
-        torch.onnx.export(model, [data['label'], data['inst']],
-                          opt.export_onnx, verbose=True)
-        exit(0)
+
     minibatch = 1 
-    if opt.engine:
-        generated = run_trt_engine(opt.engine, minibatch, [data['label'], data['inst']])
-    elif opt.onnx:
-        generated = run_onnx(opt.onnx, opt.data_type, minibatch, [data['label'], data['inst']])
-    else:        
-        generated = model.inference(data['label'], data['inst'], data['image'])
+    pose_t = data['label'][:, :opt.label_nc, :, :]
+
+    generated = model.inference(pose_t, prev_generation)
+    prev_generation = generated
         
-    visuals = OrderedDict([('input_label', util.tensor2label(data['label'][0], opt.label_nc)),
+    visuals = OrderedDict([('input_label', pose_t[0].numpy().astype(np.int32)),
                            ('synthesized_image', util.tensor2im(generated.data[0]))])
     img_path = data['path']
     print('process image... %s' % img_path)

@@ -146,17 +146,15 @@ class MovGenModel(BaseModel):
     def inference(self, pose, prev_image=None):
         # Encode Inputs        
         if prev_image is None:
-            z = torch.zeros(pose.shape).cuda()
+            z = torch.zeros(pose.size(0), self.opt.output_nc, pose.size(2), pose.size(3)).cuda()
         else:
             z = prev_image.data.cuda()
         pose = pose.data.cuda()
-        input_concat = Variable(torch.cat([pose, z], dim=1), volatile=True)
+        input_concat = Variable(torch.cat([pose, z], dim=1))
            
-        if torch.__version__.startswith('0.4'):
-            with torch.no_grad():
-                fake_image = self.netG.forward(input_concat)
-        else:
+        with torch.no_grad():
             fake_image = self.netG.forward(input_concat)
+
         return fake_image
 
     def save(self, which_epoch):
