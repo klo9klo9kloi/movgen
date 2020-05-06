@@ -6,11 +6,16 @@ import cv2
 import os
 import time
 import seaborn as sns
+import tensorflow as tf
+from human_dynamics.src.tf_smpl.batch_smpl import SMPL
+# from human_dynamics.src.tf_smpl.projection import batch_orth_proj_idrot
 from functools import partial
 from multiprocessing import Pool
 from scipy.signal import find_peaks
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
+
+smpl_path = './human_dynamics/models/neutral_smpl_with_cocoplustoesankles_reg.pkl'
 
 def draw_pose(kps, H, W):
 	"""
@@ -52,6 +57,7 @@ def draw_pose(kps, H, W):
 		img = cv2.line(img, p1, p2, color, 5)
 		img = cv2.circle(img, p2, 6, color, -1)
 	return img
+
 def denormalize(points, D=640):
     return (0.5 * ((points + 1.0) * D))
 
@@ -83,6 +89,13 @@ def alpha(p, k):
 		return 0
 	return 2*((p+1)/k)**3 - 3*((p+1)/k)**2 + 1
 
+# numpy re-implementation of the method from HMMR
+def orth_proj_idrot(X, camera):
+	camera = camera.reshape(-1, 1, 3)
+	X_trans = X[:, :, :2] + camera[:, :, 1:]
+	shape = X_trans.shape
+	return (camera[:, :, 0] * X_trans.reshape(shape[0], -1)).reshape(shape)
+
 # cams -> [scale, translation_x, translation_y]
 # joints -> 3d coords (cartesian)
 # kps -> 2d joint coords in camera perspective
@@ -92,8 +105,12 @@ def alpha(p, k):
 # omegas -> [shapes, poses_aa, cams] vector for mesh; can extract axis aligned joint rotations from inner 72 values
 
 class Node():
-	def __init__(self, cams, thetas, node_index, name="", index=-1, joints=None, kps=None, pose_rot=None):
+	def __init__(self, cams, thetas, betas, node_index, name="", index=-1, joints=None, kps=None, pose_rot=None):
+		assert(cams.shape[-1] == 3)
+		assert(thetas.shape[-1] == 72)
+		assert(betas.shape[-1] == 10)
 		self.thetas = thetas
+		self.betas = betas
 		self.cams = cams
 		self.node_index = node_index
 
@@ -108,7 +125,14 @@ class Node():
 
 	def cartesian_3d(self, axis_aligned=True):
 		if self.joints is None:
-			pass #TODO: call smpl or something
+			assert(os.path.exists(smpl_path), "Ensure that human_dynamics is set up properly!")
+			if self.smpl is None:
+				self.smpl = SMPL(smpl_path)
+			with tf.Session() as sess:
+				sess.run(tf.global_variables_initializer())
+				betas = tf.Variable(self.betas.reshape(1, -1), dtype=tf.float32)
+				thetas = tf.Variable(self.thetas.reshape(1, -1), dtype=tf.float32)
+				self.joints = smpl(betas, thetas)[0]
 		return self.joints
 
 	def cartesian_2d(self):
@@ -137,7 +161,7 @@ class SubjectDatabase():
 			data = pickle.load(open(f, 'rb'))
 			n_frames = len(data['kps'])
 			for i in range(n_frames): #UNDO LATER
-				node = Node(data['cams'][i], data['omegas'][i, 3:75], next_node, name=f.split('/')[-2], index=i, 
+				node = Node(data['cams'][i], data['omegas'][i, 3:75], data['shapes'][i], next_node, name=f.split('/')[-2], index=i, 
 							joints=data['joints'][i], kps=data['kps'][i], pose_rot=data['poses'][i])
 				self.nodes.append(node)
 				next_node += 1
@@ -230,8 +254,8 @@ class SubjectDatabase():
 			print("Actual dist calculation overhead: %d:%d:%d" % (actual//3600, actual%3600 // 60, actual%3600 % 60))
 			print("Speedup ~ %f x" % (expected_time_seconds/actual))
 
-		# f = open('dist.pkl', 'wb')
-		# pickle.dump(dist, f)
+		f = open('dist.pkl', 'wb')
+		pickle.dump(dist, f)
 
 		# N = int(dist.shape[0] ** (1/2))
 		# sns.heatmap(dist_m.reshape(N, N))
@@ -265,7 +289,7 @@ class SubjectDatabase():
 		n_components, labels = connected_components(csgraph=edges_crs, directed=True, return_labels=True, connection='strong')
 		print("Number of SCCs detected: %d" % n_components)
 		unique, counts = np.unique(labels, return_counts=True)
-		top_2_idx = np.argpartition(counts, 2)[:2]
+		top_2_idx = np.argpartition(-counts, 2)[:2]
 		top_2_scc_labels = unique[top_2_idx]
 		print(top_2_scc_labels, counts[top_2_idx])
 
@@ -315,8 +339,9 @@ class SubjectDatabase():
 			name = "transition_" + vid_A + "_" + str(A) + "_to_" + vid_B + "_" + str(B)
 			weight = alpha(p, self.window_size)
 			cams = lerp(nodes_A[p].cams, nodes_B[p].cams, weight)
+			betas = lerp(nodes_A[p].betas, nodes_B[p].cams, weight)
 			thetas = slerp(nodes_A[p].thetas, nodes_B[p].thetas, weight)
-			transition_states.append(Node(thetas, cams, self.size, name=name, index=p))
+			transition_states.append(Node(cams, thetas, betas, self.size, name=name, index=p))
 			self.size += 1
 
 		self.transitions[A][B] = transition_states
@@ -326,13 +351,14 @@ class SubjectDatabase():
 		print('Computing transitions')
 		print('----------')
 
-		directed_pairs = np.argwhere(self.edges == 1)
-		print('%d transitions detected' % len(directed_pairs))
+		all_edges = np.argwhere(self.edges == 1)
+		transition_pairs = np.array([edge for edge in all_edges if (self.nodes[edge[0]].index != (self.nodes[edge[1]].index - 1))])
+		print('%d transitions detected' % len(transition_pairs))
 
 		start = time.time()
 		self.transitions = [[[] for _ in range(self.size)] for _ in range(self.size)] #T[i, j] stores the list of Nodes that transition between Node i and Node j
 		with Pool() as p:
-			p.map(self.compute_transition, directed_pairs)
+			p.map(self.compute_transition, transition_pairs)
 		time_taken = time.time() - start
 		print("Transition compute time: %f" % time_taken)
 
