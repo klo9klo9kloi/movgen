@@ -22,7 +22,7 @@ right_hand_pairs = [
                15,16, -1,17, 17,18, 18,19, 19,20
 ]
 
-def draw_pose(full_keypoints_list):
+def draw_pose(full_keypoints_list, hands=True):
 	img = np.zeros((640, 640, 3), dtype=np.uint8)
 	body_colors = cm.rainbow(np.linspace(0, 1, len(body_part_pairs)))
 	hand_colors = cm.rainbow(np.linspace(0, 1, len(left_hand_pairs)))
@@ -37,39 +37,39 @@ def draw_pose(full_keypoints_list):
 			color = tuple(body_colors[i][:3] * 255)
 			img = cv2.line(img, p1, p2, color, 5)
 			img = cv2.circle(img, p2, 6, color, -1)
+	if hands:
+		# draw left hand
+		left_hand_points = full_keypoints_list[25*3: 25*3+21*3]
+		left_wrist = (int(body_points[7*3]), int(body_points[7*3 + 1]))
+		for i in range(0, len(left_hand_pairs), 2):
+			if left_hand_points[left_hand_pairs[i]*3 + 2] > 0.5: # only accept confident predictions
+				if left_hand_pairs[i] < 0:
+					p1 = left_wrist
+				else:
+					p1 = (int(left_hand_points[left_hand_pairs[i]*3]), int(left_hand_points[left_hand_pairs[i]*3 + 1]))
+				p2 = (int(left_hand_points[left_hand_pairs[i+1]*3]), int(left_hand_points[left_hand_pairs[i+1]*3 + 1]))
 
-	# draw left hand
-	left_hand_points = full_keypoints_list[25*3: 25*3+21*3]
-	left_wrist = (int(body_points[7*3]), int(body_points[7*3 + 1]))
-	for i in range(0, len(left_hand_pairs), 2):
-		if left_hand_points[left_hand_pairs[i]*3 + 2] > 0.5: # only accept confident predictions
-			if left_hand_pairs[i] < 0:
-				p1 = left_wrist
-			else:
-				p1 = (int(left_hand_points[left_hand_pairs[i]*3]), int(left_hand_points[left_hand_pairs[i]*3 + 1]))
-			p2 = (int(left_hand_points[left_hand_pairs[i+1]*3]), int(left_hand_points[left_hand_pairs[i+1]*3 + 1]))
-
-			color = tuple(hand_colors[i][:3] * 255)
-			img = cv2.line(img, p1, p2, color, 3)
-			img = cv2.circle(img, p2, 4, color, -1)
+				color = tuple(hand_colors[i][:3] * 255)
+				img = cv2.line(img, p1, p2, color, 3)
+				img = cv2.circle(img, p2, 4, color, -1)
 
 
-	# draw right hand
-	right_hand_points = full_keypoints_list[25*3 + 21*3:]
-	right_wrist = (int(body_points[4*3]), int(body_points[4*3 + 1]))
-	for i in range(0, len(right_hand_pairs), 2):
-		if right_hand_points[right_hand_pairs[i]*3 + 2] > 0.5: # only accept confident predictions
-			if right_hand_pairs[i] < 0:
-				p1 = right_wrist
-			else:
-				p1 = (int(right_hand_points[right_hand_pairs[i]*3]), int(right_hand_points[right_hand_pairs[i]*3 + 1]))
-			p2 = (int(right_hand_points[right_hand_pairs[i+1]*3]), int(right_hand_points[right_hand_pairs[i+1]*3 + 1]))
+		# draw right hand
+		right_hand_points = full_keypoints_list[25*3 + 21*3:]
+		right_wrist = (int(body_points[4*3]), int(body_points[4*3 + 1]))
+		for i in range(0, len(right_hand_pairs), 2):
+			if right_hand_points[right_hand_pairs[i]*3 + 2] > 0.5: # only accept confident predictions
+				if right_hand_pairs[i] < 0:
+					p1 = right_wrist
+				else:
+					p1 = (int(right_hand_points[right_hand_pairs[i]*3]), int(right_hand_points[right_hand_pairs[i]*3 + 1]))
+				p2 = (int(right_hand_points[right_hand_pairs[i+1]*3]), int(right_hand_points[right_hand_pairs[i+1]*3 + 1]))
 
-			color = tuple(hand_colors[i][:3] * 255)
-			img = cv2.line(img, p1, p2, color, 3)
-			img = cv2.circle(img, p2, 4, color, -1)
+				color = tuple(hand_colors[i][:3] * 255)
+				img = cv2.line(img, p1, p2, color, 3)
+				img = cv2.circle(img, p2, 4, color, -1)
 	return img
-
+# USAGE: python render_poses.py SUBJECT_NAME/SUBJECT_VIDEO'
 def main():
 	args = sys.argv[1:]
 	assert(len(args) == 1)

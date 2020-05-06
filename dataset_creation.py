@@ -115,42 +115,21 @@ class SequenceDataset():
 
         ### poses
         walk = list(os.walk(opt.dataroot))
-        pose_paths = []
+        self.pose_paths = []
         for (dirpath, dirnames, filenames) in walk:
-            if 'keypoints' in dirpath:
-                pose_paths += sorted(glob.glob(dirpath + "/*.json"), key=lambda x: int(x.split('/')[-1].split('_')[0][5:]))
-
-        self.dataset_size = len(pose_paths) - opt.seq_len # ensure we can generate full sequences for any index
-
-        # make data matrix
-        data = []
-        weights = []
-        for path in pose_paths:
-            with open(path, 'rb') as f:
-                j = json.load(f)
-                subject = j['people'][0]
-                frame_data = np.array(subject['pose_keypoints_2d'] + subject['hand_left_keypoints_2d'] + subject['hand_right_keypoints_2d'])
-                if opt.use_confidence:
-                    weights.append(np.ones(25+21+21))
-                else:
-                    confidence_indices = np.arange(2, 75+63+63, 3)
-                    weights.append(frame_data[confidence_indices])
-                    mask = np.ones(75+63+63).astype(np.bool)
-                    mask[confidence_indices] = False
-                    frame_data = frame_data[mask]
-                data.append(frame_data)
-
-        self.data = np.array(data)
-        self.weights = np.array(weights)
+            if 'poses' in dirpath:
+                self.pose_paths += sorted(glob.glob(dirpath + "/*.jpg"), key=lambda x: int(x.split('/')[-1].split('_')[0][5:]))
+        self.dataset_size = len(self.pose_paths) - opt.seq_len # ensure we can generate full sequences for any index
 
     def __getitem__(self, index):
         assert(index < self.dataset_size)
         
-        seq_t_to_T = torch.from_numpy(self.data[np.arange(index, index+self.opt.seq_len)])
-        seq_tp1_to_Tp1 = torch.from_numpy(self.data[np.arange(index+1, index+self.opt.seq_len+1)])
-        importance_weights = torch.from_numpy(self.weights[np.arange(index+1, index+self.opt.seq_len+1)])
-
-        return seq_t_to_T, seq_tp1_to_Tp1, importance_weights
+        seq_t_to_T = torch.empty(self.opt.seq_len, 3, 64, 64)
+        # # seq_tp1_to_Tp1 = torch.empty(self.opt.seq_len, 3, 640, 640)
+        for i in range(0, self.opt.seq_len):
+            seq_t_to_T[i] = transforms.Compose([transforms.Resize((64, 64)), transforms.ToTensor()])(Image.open(self.pose_paths[i + index]))
+        # # seq_tp1_to_Tp1 = torch.from_numpy(self.data[np.arange(index+1, index+self.opt.seq_len+1)])
+        return seq_t_to_T
 
     def __len__(self):
         return self.dataset_size // self.opt.b * self.opt.b
