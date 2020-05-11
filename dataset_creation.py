@@ -72,7 +72,6 @@ class MovGenDataset():
         params = get_params(self.opt, pose1.size)
 
         transform_pose = get_transform(self.opt, params, method=Image.NEAREST, normalize=False)
-        print(transform_pose)
         pose1_tensor = transform_pose(pose1) * 255.0
         pose2_tensor = transform_pose(pose2) * 255.0
 

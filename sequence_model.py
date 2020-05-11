@@ -2,38 +2,58 @@ import torch
 import torch.nn as nn
 
 class pose_generator(nn.Module):
-    def __init__(self, noise_dim, n_layers=1):
+    def __init__(self, noise_dim):
         super(pose_generator, self).__init__()
-        self.recurrent_block = nn.GRU(noise_dim, 256, n_layers)
+        self.recurrent_block = nn.GRU(noise_dim, 100, 1)
         self.output_block = nn.Sequential(
-            nn.ConvTranspose2d(1, 256, 6),
+            nn.ConvTranspose2d(2, 256, 4, stride=2, padding=2),
             nn.BatchNorm2d(256),
             nn.LeakyReLU(inplace=True),
-            nn.ConvTranspose2d(256, 128, 4, stride=2, padding=4),
+            nn.ConvTranspose2d(256, 128, 4, stride=2, padding=3),
             nn.BatchNorm2d(128),
             nn.LeakyReLU(inplace=True),
-            nn.ConvTranspose2d(128, 64, 2, stride=2, padding=4),
+            nn.ConvTranspose2d(128, 64, 4, stride=2, padding=1),
             nn.BatchNorm2d(64),
             nn.LeakyReLU(inplace=True),
             nn.Conv2d(64, 3, 1),
             nn.BatchNorm2d(3),
             nn.LeakyReLU(inplace=True),
-            )
+            )   
 
-        self.n_layers = n_layers
+        #9 * 2 + 1 + 3 - 4 = 18
+        # 17 * 2 + 1 + 3 - 6 = 32
+        # 31*2 + 1 + 3 - 2 = 64 
 
-    def forward(self, z, hidden):
+
+        # (64 -7)//2 + 1 = 29
+        # (29-5)//2 + 1 = 13
+        #(13-4)//2 + 1 = 10
+        self.condition = nn.Sequential(
+            nn.Conv2d(6, 64, 7, stride=2),
+            nn.LeakyReLU(inplace=True),
+            nn.Conv2d(64, 128, 5, stride=2),
+            nn.LeakyReLU(inplace=True),
+            nn.Conv2d(128, 1, 4),
+            nn.LeakyReLU(inplace=True)
+        )
+
+    def forward(self, z, start_and_end_poses):
         T, B, _ = z.shape
-        out, _ = self.recurrent_block(z, hidden)
-        D = int(out.size(-1)**(1/2))
-        out = out.reshape(T, B, 1, D, D)
+        condition = self.condition(start_and_end_poses)
+        print(condition.shape)
+        out, _ = self.recurrent_block(z, condition.reshape(1, B, -1))
+
+        out = out.reshape(T, B, 1, 10, 10)
+        condition_tiled = condition.unsqueeze(0).repeat(15, 1, 1, 1, 1)
+        out_c = torch.cat([out, condition_tiled], dim=2)
+
         poses = torch.empty(T, B, 3, 64, 64).double().to(z.device)
         for i in range(T):
-            poses[i] = self.output_block(out[i])
+            poses[i] = self.output_block(out_c[i])
         return poses
 
     def init_hidden(self, batch_size, device):
-        hidden = torch.zeros(self.n_layers, batch_size, 256).to(device).double()
+        hidden = torch.zeros(1, batch_size, 100).to(device).double()
         return hidden
 
 class frame_discriminator(nn.Module):
@@ -57,7 +77,7 @@ class frame_discriminator(nn.Module):
     def forward(self, sample):
         N = sample.size(0)
         validity = self.output_block(sample).reshape(N, -1)
-        return validity
+        return torch.mean(validity, dim=1)
 
 class sequence_discriminator(nn.Module):
     def __init__(self, n_layers=1):
@@ -86,4 +106,4 @@ class sequence_discriminator(nn.Module):
         for i in range(T):
             reshaped[:, :, i, :, :] = sample[i]
         validity = self.output_block(reshaped.to(sample.device).double()).reshape(N, -1)
-        return validity
+        return torch.mean(validity, dim=1)

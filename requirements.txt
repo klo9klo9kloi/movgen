@@ -1,0 +1,9 @@
+tensorflow<=1.15,>=1.10
+pytorch>=1.4.0
+numpy
+scipy
+seaborn
+matplotlib
+pickle
+cv2
+tqdm
