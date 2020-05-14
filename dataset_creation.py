@@ -52,12 +52,12 @@ class MovGenDataset():
 
         ### poses
         self.pose_dir = os.path.join(opt.dataroot, 'poses')
-        self.pose_paths = sorted(glob.glob(self.pose_dir + "/*.jpg"), key=lambda x: int(x.split('/')[-1].split('_')[0][5:]))
+        self.pose_paths = sorted(glob.glob(self.pose_dir + "/*.png"), key=lambda x: int(x.split('/')[-1].split('_')[0][:-4]))
 
         ### input B (real images)
         if opt.isTrain:
             self.gt_dir = os.path.join(opt.dataroot, 'frames')  
-            self.gt_paths = sorted(glob.glob(self.gt_dir + "/*.jpg"), key=lambda x: int(x.split('/')[-1].split('.')[0][5:]))
+            self.gt_paths = sorted(glob.glob(self.gt_dir + "/*.png"), key=lambda x: int(x.split('/')[-1].split('.')[0][:-4]))
             assert(len(self.gt_paths) == len(self.pose_paths))
 
         self.dataset_size = len(self.pose_paths) - 1

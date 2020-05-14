@@ -19,13 +19,13 @@ def slerp(p1, p2, t):
 	""" Spherical Linear Interpolation of Quaternions
 	"""
 	assert(p1.shape == p2.shape)
-	p1 = p1.reshape(24, 4)
-	p2 = p2.reshape(24, 4)
+	p1 = p1.reshape(-1, 4)
+	p2 = p2.reshape(-1, 4)
 
-	p1 /= np.sqrt(np.sum(p1**2, axis=1)).reshape(24, 1)
-	p2 /= np.sqrt(np.sum(p2**2, axis=1)).reshape(24, 1)
+	p1 = p1/np.sqrt(np.sum(p1**2, axis=1)).reshape(-1, 1)
+	p2 = p2/np.sqrt(np.sum(p2**2, axis=1)).reshape(-1, 1)
 
-	dot_prods = np.diag(np.dot(p1, p2.T)).copy() #prevents puzzling read-only error
+	dot_prods = np.sum(p1*p2, axis=1) #prevents puzzling read-only error
 
 	negative = (dot_prods < 0)
 	if np.sum(negative) > 0:
@@ -35,7 +35,7 @@ def slerp(p1, p2, t):
 	dot_threshold = 0.9995
 	close_to_thre = (dot_prods > dot_threshold)
 
-	res = np.empty((24, 4))
+	res = np.empty(p1.shape)
 
 	# just linearly interpolate if close
 	if np.sum(close_to_thre) > 0:
@@ -107,3 +107,14 @@ def quart2aa(quart):
 	e = q_e/np.sqrt(np.sum(q_e**2, axis=1)).reshape(-1, 1)
 	theta = 2* np.arccos(quart[:, -1]).reshape(-1, 1)
 	return e * theta
+
+# forces a non-trivial random choice
+def pseudo_random_choice(choices, curr_node):
+	n = len(choices)
+	if n > 1:
+		return np.random.choice(choices[choices != curr_node+1])
+	else:
+		return choices[0]
+
+def random_choice(choices, curr_node):
+	return np.random.choice(choices)

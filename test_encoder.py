@@ -9,6 +9,7 @@ import pix2pixHD.util.util as util
 from pix2pixHD.util.visualizer import Visualizer
 from pix2pixHD.util import html
 import torch
+import numpy as np
 
 opt = TestOptions().parse(save=False)
 opt.nThreads = 1   # test code only supports nThreads = 1
@@ -39,8 +40,8 @@ else:
 
 prev_generation = None
 for i, data in enumerate(dataset):
-    if i >= opt.how_many:
-        break
+    # if i >= opt.how_many:
+    #     break
     if opt.data_type == 16:
         data['label'] = data['label'].half()
     elif opt.data_type == 8:
@@ -51,9 +52,9 @@ for i, data in enumerate(dataset):
 
     generated = model.inference(pose_t, prev_generation)
     prev_generation = generated
-        
-    visuals = OrderedDict([('input_label', pose_t[0].numpy().astype(np.int32)),
-                           ('synthesized_image', util.tensor2im(generated.data[0]))])
+
+    visuals = OrderedDict([('input_label', util.tensor2im(pose_t[0].data, normalize=False)),
+                           ('synthesized_image', util.tensor2im(generated[0].data))])
     img_path = data['path']
     print('process image... %s' % img_path)
     visualizer.save_images(webpage, visuals, img_path)

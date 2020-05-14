@@ -40,20 +40,20 @@ class pose_generator(nn.Module):
     def forward(self, z, start_and_end_poses):
         T, B, _ = z.shape
         condition = self.condition(start_and_end_poses)
-        print(condition.shape)
+        # print(condition.shape)
         out, _ = self.recurrent_block(z, condition.reshape(1, B, -1))
 
         out = out.reshape(T, B, 1, 10, 10)
         condition_tiled = condition.unsqueeze(0).repeat(15, 1, 1, 1, 1)
         out_c = torch.cat([out, condition_tiled], dim=2)
 
-        poses = torch.empty(T, B, 3, 64, 64).double().to(z.device)
+        poses = torch.empty(B, T, 3, 64, 64).to(z.device)
         for i in range(T):
-            poses[i] = self.output_block(out_c[i])
+            poses[:, i, :, :, :] = self.output_block(out_c[i])
         return poses
 
     def init_hidden(self, batch_size, device):
-        hidden = torch.zeros(1, batch_size, 100).to(device).double()
+        hidden = torch.zeros(1, batch_size, 100).to(device)
         return hidden
 
 class frame_discriminator(nn.Module):
@@ -100,10 +100,10 @@ class sequence_discriminator(nn.Module):
         self.n_layers = n_layers
 
     def forward(self, sample):
-        # sample will have shape (T, N, C, H, W), need to convert to (N, C, T, H, W)
-        T, N, C, H, W = sample.shape
+        # sample will have shape (N, T, C, H, W), need to convert to (N, C, T, H, W)
+        N, T, C, H, W = sample.shape
         reshaped = torch.empty(N, C, T, H, W)
         for i in range(T):
-            reshaped[:, :, i, :, :] = sample[i]
-        validity = self.output_block(reshaped.to(sample.device).double()).reshape(N, -1)
+            reshaped[:, :, i, :, :] = sample[:, i, :, :, :]
+        validity = self.output_block(reshaped.to(sample.device)).reshape(N, -1)
         return torch.mean(validity, dim=1)

@@ -49,7 +49,7 @@ generator = pose_generator(noise_dim)
 discriminator_f = frame_discriminator()
 discriminator_s = sequence_discriminator()
 discriminator_start = frame_discriminator()
-disciminator_end = frame_discriminator()
+discriminator_end = frame_discriminator()
 
 # if args.continue_from > 0:
 #     generator.load_state_dict(load_network('generator', args.continue_from, args.savedir))
@@ -75,8 +75,8 @@ else:
 generator.to(device)
 discriminator_f.to(device)
 discriminator_s.to(device)
-disciminator_start.to(device)
-disciminator_end.to(device)
+discriminator_start.to(device)
+discriminator_end.to(device)
 
 #set up optimizers
 g_optim = torch.optim.Adam(generator.parameters(), lr=args.lr, weight_decay=args.weight_decay, betas=(0.5, 0.999))
@@ -86,8 +86,6 @@ d_start_optim = torch.optim.Adam(discriminator_start.parameters(), lr=args.lr, w
 d_end_optim = torch.optim.Adam(discriminator_end.parameters(), lr=args.lr, weight_decay=args.weight_decay, betas=(0.5, 0.999))
 
 seq_len = args.seq_len
-generator_update_freq = args.g_update_freq
-discriminator_update_freq = args.d_update_freq
 
 criterion = nn.BCELoss()
 
@@ -95,82 +93,66 @@ turn = 0
 
 # train
 for i in range(args.continue_from, args.continue_from + args.epochs):
-    if i % args.switch_freq == 0:
-        turn = 1 - turn
-
-    # train generator
+    turn = 1 - turn
     if turn:
-        discriminator_s.eval()
-        discriminator_f.eval()
-        discriminator_start.eval()
-        discriminator_end.eval()
-        generator.train()
-
         for b, real_seq in enumerate(loader):
+            #real_seq: (B, T, C, D, D)
             batch_size = real_seq.size(0)
 
-            valid = torch.ones((batch_size, 1), requires_grad=False).to(device)
-            fake = torch.zeros((batch_size, 1), requires_grad=False).to(device)
+            valid = torch.ones((batch_size), requires_grad=False).to(device).float()
+            fake = torch.zeros((batch_size), requires_grad=False).to(device).float()
 
             f_index = np.random.randint(0, seq_len)
 
+             # train generator
             g_optim.zero_grad()
             
             z = torch.empty(seq_len, batch_size, noise_dim).normal_(mean=0.0, std=1.0).to(device)
             start_and_end_poses = torch.cat([real_seq[:, 0], real_seq[:, 1]], dim=1).to(device)
 
-            generated_seq = generator(z, start_and_end_poses)
+            generated_seq = generator(z, start_and_end_poses) # (B, T, C, D, D)
 
-            g_loss = criterion(discriminator_f(generated_seq[f_index]), valid)
-            g_loss += criterion(discriminator_start(generated_seq[0]), valid)
-            g_loss += criterion(discriminator_end(generated_seq[1]), valid)
+            g_loss = criterion(discriminator_f(generated_seq[:, f_index]), valid)
+            g_loss += criterion(discriminator_start(generated_seq[:, 0]), valid)
+            g_loss += criterion(discriminator_end(generated_seq[:, -1]), valid)
             g_loss += criterion(discriminator_s(generated_seq), valid)
 
             g_loss.backward()
             g_optim.step()  
 
             print(
-                "[Epoch %d/%d] [Batch %d/%d] [G loss: %f] "
+                "[Epoch %d/%d] [Batch %d/%d] [G loss: %f]"
                 % (i, args.epochs + args.continue_from, b, len(loader), g_loss.item())
-            
             )
-
-    # train discminator
     else:
-        discriminator_s.train()
-        discriminator_f.train()
-        discriminator_start.train()
-        discriminator_end.train()
-        generator.eval()
-
         for b, real_seq in enumerate(loader):
+            #real_seq: (B, T, C, D, D)
             batch_size = real_seq.size(0)
 
-            valid = torch.ones((batch_size, 1), requires_grad=False).to(device)
-            fake = torch.zeros((batch_size, 1), requires_grad=False).to(device)
+            valid = torch.ones((batch_size), requires_grad=False).to(device).float()
+            fake = torch.zeros((batch_size), requires_grad=False).to(device).float()
 
             f_index = np.random.randint(0, seq_len)
-
+            # train discriminator
             d_f_optim.zero_grad()
             d_s_optim.zero_grad()
             d_start_optim.zero_grad()
             d_end_optim.zero_grad()
 
+            real_seq = real_seq.to(device)
             z = torch.empty(seq_len, batch_size, noise_dim).normal_(mean=0.0, std=1.0).to(device)
             start_and_end_poses = torch.cat([real_seq[:, 0], real_seq[:, 1]], dim=1).to(device)
             generated_seq = generator(z, start_and_end_poses)
 
-            real_seq = real_seq.to(device).double().transpose(1, 0)
-
-            d_real = criterion(discriminator_f(real_seq[f_index]), valid)
-            d_real += criterion(disciminator_start(real_seq[0]), valid)
-            d_real += criterion(discriminator_end(real_seq[-1]), valid)
+            d_real = criterion(discriminator_f(real_seq[:, f_index]), valid)
+            d_real += criterion(discriminator_start(real_seq[:, 0]), valid)
+            d_real += criterion(discriminator_end(real_seq[:, -1]), valid)
             d_real += criterion(discriminator_s(real_seq), valid)
 
-            d_fake = criterion(discriminator_f(generated_seq[f_index]), fake)
-            d_fake += criterion(disciminator_start(generated_seq[0]), fake)
-            d_fake += criterion(discriminator_end(generated_seq[0]), fake)
-            d_fake += criterion(disciminator_s(generated_seq), fake)
+            d_fake = criterion(discriminator_f(generated_seq[:, f_index]), fake)
+            d_fake += criterion(discriminator_start(generated_seq[:, 0]), fake)
+            d_fake += criterion(discriminator_end(generated_seq[:, -1]), fake)
+            d_fake += criterion(discriminator_s(generated_seq), fake)
 
             d_loss = 0.5 * (d_real + d_fake)
 
@@ -181,13 +163,15 @@ for i in range(args.continue_from, args.continue_from + args.epochs):
             d_end_optim.step()
 
             print(
-                "[Epoch %d/%d] [Batch %d/%d] [D loss: %f] "
+                "[Epoch %d/%d] [Batch %d/%d] [D loss: %f]"
                 % (i, args.epochs + args.continue_from, b, len(loader), d_loss.item())
             )
-    if (i-1) % args.save_epoch_freq == 0:
+    if i % args.save_epoch_freq == 0:
         save_network(generator, 'generator', i, args.savedir)
-        # save_network(discriminator_f, 'discriminator_f', i, args.savedir)
-        # save_network(discriminator_s, 'discriminator_s', i, args.savedir)
+        save_network(discriminator_f, 'discriminator_f', i, args.savedir)
+        save_network(discriminator_s, 'discriminator_s', i, args.savedir)
+        save_network(discriminator_start, 'discriminator_start', i ,args.savedir)
+        save_network(discriminator_end, 'discriminator_end', i, args.savedir)
 
 save_network(generator, 'generator', args.epochs + args.continue_from, args.savedir)
 # save_network(discriminator_f, 'discriminator_f', args.epochs + args.continue_from, args.savedir)
