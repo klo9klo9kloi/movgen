@@ -11,6 +11,7 @@ from motion_graph import SubjectDatabase
 from viz import draw_pose_openpose, animate_sequence
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
+from collections import defaultdict
 
 def copy_path(path):
 	p = Path(path.db)
@@ -41,16 +42,16 @@ class Path():
 		cost = 0
 		edge_type = None
 		if self.db.nodes[new_node].name != self.db.nodes[last_node].name:
-			cost = 5/(size - last_interesting_edge)
+			cost = 300/(size - last_interesting_edge)
 			edge_type = "cross"
 		elif self.db.nodes[new_node].index < self.db.nodes[last_node].index:
-			cost = 5/(size - last_interesting_edge)
+			cost = 300/(size - last_interesting_edge)
 			edge_type = "back"
 		elif self.db.nodes[new_node].index > self.db.nodes[last_node].index + self.db.window_size:
-			cost = 10/(size - last_interesting_edge)
+			cost = 600/(size - last_interesting_edge)
 			edge_type = "skip"
 		else:
-			cost = min((size-last_interesting_edge)/60, 1) * 10
+			cost = min((size-last_interesting_edge)/60, 10)
 		return cost, edge_type
 
 	def additional_cost(self, node):
@@ -122,7 +123,7 @@ parser.add_argument('--input_method', type=str, default='random') #Options: rand
 parser.add_argument('--smpl_path', type=str, default='./human_dynamics/models/neutral_smpl_with_cocoplustoesankles_reg.pkl')
 parser.add_argument('--n', type=int, default=90)
 parser.add_argument('--m', type=int, default=30)
-parser.add_argument('--stop_threshold', type=float, default=2000) #2000 / 30fps ~ 60 second video
+parser.add_argument('--stop_threshold', type=float, default=20000) #20000 / (30fps * 10 base cost) ~ 60 second video
 parser.add_argument('--savedir', type=str, default="constrained_walk")
 args = parser.parse_args()
 #------------------------------------
@@ -154,7 +155,7 @@ if args.input_method == 'random':
 	start = db.nodes[db.sample_edge()[0]]
 	end = db.nodes[db.sample_edge()[1]]
 	start_index = start.node_index
-	end_index = start.node_index
+	end_index = end.node_index
 
 	print("Start: %s frame %d, End: %s frame %d" % (start.name, start.index, end.name, end.index))
 
@@ -215,19 +216,24 @@ start = time.time()
 
 path_offset = 0
 
+best_cost_ending_at = defaultdict(lambda: float("inf"))
+
 while best_path is None:
 	best_cost = float("inf")
 	best_n_path = None
 	while len(pq) > 0 and (best_n_path is None or best_n_path.get_cost() > args.stop_threshold):
 		curr_cost, curr_path = heapq.heappop(pq)
+		curr_node = curr_path.get_curr_node()
 
-		if curr_path.get_curr_node() == end_index and curr_cost < best_total_cost: # found a complete path
+		if curr_node == end_index and curr_cost < best_total_cost: # found a complete path
 			best_total_cost = curr_cost
 			best_path = curr_path
 		elif (curr_path.size - path_offset) >= args.n and curr_cost < best_cost: # found a complete n path
 			best_cost = curr_cost
 			best_n_path = curr_path
-		elif curr_cost < best_cost: # keep searching
+			print("found new best n path")
+		elif curr_cost < best_cost and curr_cost < best_cost_ending_at[curr_node]: # keep searching
+			best_cost_ending_at[curr_node] = curr_cost
 			next_node_options = np.argwhere(db.edges[curr_path.get_curr_node()] == 1).flatten()
 			for node in next_node_options:
 				if node not in curr_path.seen: #prevent continuous loops
@@ -236,6 +242,7 @@ while best_path is None:
 					heapq.heappush(pq, (extended_path.get_cost(), extended_path))
 
 	print(best_n_path.get_cost())
+	print()
 	if best_n_path is None and best_path is None:
 		print("No path found.")
 		sys.exit(0)
@@ -249,6 +256,7 @@ while best_path is None:
 		pq = []
 		heapq.heappush(pq, (new_start.get_cost(), new_start))
 		path_offset += args.m
+		best_cost_ending_at = defaultdict(lambda: float("inf"))
 
 
 time_taken = time.time() - start
@@ -259,12 +267,10 @@ SAVE AND ANIMATE
 '''
 
 if best_path is not None:
-	# f = open(os.path.join(args.savedir, 'path.txt'), 'w')
-	# f.write(str(best_path.get_path()) + "\n")
-	# f.write(str(best_path.crosses) + "\n")
-	# f.write(str(best_path.backs) + "\n")
-	# f.write(str(best_path.skips) + "\n")
-	# f.close()
+	f = open(os.path.join(args.savedir, 'path.txt'), 'w')
+	for node_index in best_path.get_path():
+		f.write(str(db.nodes[node_index]) + '\n')
+	f.close()
 
 	sequence = []
 	node_sequence = best_path.get_path()
@@ -274,6 +280,6 @@ if best_path is not None:
 			sequence.append(db.transitions[node_sequence[i-1]][node_sequence[i]].joints_2d())
 		sequence.append(db.nodes[node_sequence[i]].joints_2d())
 	sequence = np.concatenate(sequence, axis=0)
-	animate_sequence(sequence, "constrained_walk", save_images=True)
+	animate_sequence(sequence, args.savedir, save_images=True)
 else:
 	print("No path found.")

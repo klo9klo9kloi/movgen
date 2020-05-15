@@ -401,10 +401,13 @@ class SubjectDatabase():
 	def random_walk(self, vid_length_secs=10, fps=30, method='pseudo'):
 		min_n_frames = vid_length_secs * fps
 		sequence_2d = []
+		info = []
 
 		start_edge = self.sample_edge()
 		sequence_2d.append(self.nodes[start_edge[0]].joints_2d())
 		sequence_2d.append(self.nodes[start_edge[1]].joints_2d())
+		info.append(str(self.nodes[start_edge[0]]))
+		info.append(str(self.nodes[start_edge[1]]))
 		curr_node = start_edge[1]
 
 		transition_method = self.get_transition_method(method)
@@ -412,6 +415,7 @@ class SubjectDatabase():
 		n = 2
 		while n < min_n_frames:
 			next_node = transition_method(np.argwhere(self.edges[curr_node] == 1).flatten(), curr_node)
+			info.append(str(self.nodes[next_node]))
 			if self.transitions[curr_node][next_node] is not None:
 				print(curr_node, next_node)
 				print("Transitioning from %s to %s" % (self.nodes[curr_node].name, self.nodes[next_node].name) )
@@ -426,15 +430,18 @@ class SubjectDatabase():
 			n += 1
 			curr_node = next_node
 		print()
-		return np.concatenate(sequence_2d, axis=0)
+		return np.concatenate(sequence_2d, axis=0), info
 
 	def creative_walk(self, vid_length_secs=10, fps=30):
 		min_n_frames = vid_length_secs * fps
 		sequence_2d = []
+		info = []
 
 		start_edge = self.sample_edge()
 		sequence_2d.append(self.nodes[start_edge[0]].joints_2d())
 		sequence_2d.append(self.nodes[start_edge[1]].joints_2d())
+		info.append(str(self.nodes[start_edge[0]]))
+		info.append(str(self.nodes[start_edge[1]]))
 		curr_node = start_edge[1]
 
 		edge_weights = self.edges.copy() #probability of taking a specific edge
@@ -463,11 +470,12 @@ class SubjectDatabase():
 				a = self.transitions[curr_node][next_node].joints_2d()
 				sequence_2d.append(a)
 				n += len(a)
+			info.append(str(self.nodes[next_node]))
 			sequence_2d.append(self.nodes[next_node].joints_2d())
 			n += 1
 			curr_node = next_node
 		print()
-		return np.concatenate(sequence_2d, axis=0)
+		return np.concatenate(sequence_2d, axis=0), info
 
 	def get_transition_method(self, method_name):
 		if method_name == 'pseudo':
@@ -487,6 +495,9 @@ if __name__ == "__main__":
 	parser.add_argument('--smpl_batch_size', type=int, default=64)
 	parser.add_argument('--smpl_path', type=str, default='./human_dynamics/models/neutral_smpl_with_cocoplustoesankles_reg.pkl')
 	parser.add_argument('--dist_threshold', type=float, default=0.5)
+	parser.add_argument('--walk', action='store_true', default=False)
+	parser.add_argument('--walk_type', type=str, default='true')
+	parser.add_argument('--seed', type=int, default=-1)
 	args = parser.parse_args()
 	#------------------------------------
 
@@ -507,7 +518,19 @@ if __name__ == "__main__":
 		db.load_transitions()
 	else:
 		db.compute_transitions(args.smpl_batch_size)
-	seq = db.creative_walk()
-	animate_sequence(seq, 'creative_walk', save_images=False)
+
+	if args.walk:
+		if args.seed < 0:
+			seed = np.random.randint(0, 99999)
+		else:
+			seed = args.seed
+		np.random.seed(seed)
+		seq, seq_info = db.random_walk(method=args.walk_type)
+		animate_sequence(seq, args.output_dir, save_images=False)
+
+		f = open(os.path.join(args.output_dir, 'path.txt'), 'w')
+		for info in seq_info:
+			f.write(info + "\n")
+		f.close()
 
 
